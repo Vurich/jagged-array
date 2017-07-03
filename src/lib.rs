@@ -75,12 +75,44 @@ impl<Element, A: Array<Item = usize>> Default for JaggedArray<Element, A> {
     }
 }
 
+impl<'a, Element, A: Array<Item = usize>> IntoIterator for &'a JaggedArray<Element, A> {
+    type Item = <Self::IntoIter as Iterator>::Item;
+    type IntoIter = Iter<'a, Element>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, Element, A: Array<Item = usize>> IntoIterator for &'a mut JaggedArray<Element, A> {
+    type Item = <Self::IntoIter as Iterator>::Item;
+    type IntoIter = IterMut<'a, Element>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
 impl<Element, A: Array<Item = usize>> JaggedArray<Element, A> {
     pub fn new() -> Self {
         JaggedArray {
             elements: Default::default(),
             lengths: Default::default(),
             indices: Default::default(),
+        }
+    }
+
+    pub fn iter(&self) -> Iter<Element> {
+        Iter {
+            elements: &self.elements,
+            lengths: &self.lengths,
+        }
+    }
+
+    pub fn iter_mut(&mut self) -> IterMut<Element> {
+        IterMut {
+            elements: &mut self.elements,
+            lengths: &mut self.lengths,
         }
     }
 
@@ -142,6 +174,16 @@ impl<Element: Clone, A: Array<Item = usize>, Slice: AsRef<[Element]>> FromIterat
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn it_works() {}
+    fn assert_returns_same_elements() {
+        let input = vec![vec![1, 2, 3, 4, 5], vec![2, 3, 4], vec![2; 5]];
+
+        let jagged: JaggedArray<_> = input.iter().collect();
+
+        let output: Vec<Vec<_>> = jagged.iter().map(|slice| slice.to_owned()).collect();
+
+        assert_eq!(input, output);
+    }
 }
