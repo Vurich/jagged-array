@@ -13,15 +13,15 @@ use smallvec::{SmallVec, Array};
 // `LengthAndIndices(Vec<usize>, Vec<usize>)` struct, then implementing `GetNthLength` and
 // `GetNthIndex` traits. In the `LengthOnly` case we can calculate it each time. If we do this it
 // would also be good to use `VecLike` for all of the fields (`elements` included).
+// TODO: Skip one element in indices, since the first element is always 0.
 pub struct JaggedArray<Element, A: Array<Item = usize> = [usize; 8]> {
     elements: Vec<Element>,
-    lengths: SmallVec<A>,
     indices: SmallVec<A>,
 }
 
 pub struct Iter<'a, Element: 'a> {
     elements: &'a [Element],
-    lengths: &'a [usize],
+    indices: &'a [usize],
 }
 
 impl<'a, Element> Iterator for Iter<'a, Element> {
@@ -29,15 +29,22 @@ impl<'a, Element> Iterator for Iter<'a, Element> {
 
     // TODO: We can trust all of this - do it unsafely
     fn next(&mut self) -> Option<Self::Item> {
-        if self.lengths.is_empty() {
+        if self.elements.is_empty() {
             return None;
         }
 
-        let (now_lens, rest_lens) = self.lengths.split_at(1);
-        let now_len = now_lens[0];
+        let (now_is, rest_is) = self.indices.split_at(1);
+
+        if rest_is.is_empty() {
+            return Some(mem::replace(&mut self.elements, &[]));
+        }
+
+        let now_i = now_is[0];
+        let next_i = rest_is[0];
+        let now_len = next_i - now_i;
         let (now_el, rest_el) = self.elements.split_at(now_len);
 
-        self.lengths = rest_lens;
+        self.indices = rest_is;
         self.elements = rest_el;
 
         Some(now_el)
@@ -46,7 +53,7 @@ impl<'a, Element> Iterator for Iter<'a, Element> {
 
 pub struct IterMut<'a, Element: 'a> {
     elements: &'a mut [Element],
-    lengths: &'a [usize],
+    indices: &'a [usize],
 }
 
 impl<'a, Element> Iterator for IterMut<'a, Element> {
@@ -54,15 +61,22 @@ impl<'a, Element> Iterator for IterMut<'a, Element> {
 
     // TODO: We can trust all of this - do it unsafely
     fn next(&mut self) -> Option<Self::Item> {
-        if self.lengths.is_empty() {
+        if self.elements.is_empty() {
             return None;
         }
 
-        let (now_lens, rest_lens) = self.lengths.split_at(1);
-        let now_len = now_lens[0];
+        let (now_is, rest_is) = self.indices.split_at(1);
+
+        if rest_is.is_empty() {
+            return Some(mem::replace(&mut self.elements, &mut []));
+        }
+
+        let now_i = now_is[0];
+        let next_i = rest_is[0];
+        let now_len = next_i - now_i;
         let (now_el, rest_el) = mem::replace(&mut self.elements, &mut []).split_at_mut(now_len);
 
-        self.lengths = rest_lens;
+        self.indices = rest_is;
         self.elements = rest_el;
 
         Some(now_el)
@@ -97,38 +111,56 @@ impl<Element, A: Array<Item = usize>> JaggedArray<Element, A> {
     pub fn new() -> Self {
         JaggedArray {
             elements: Default::default(),
-            lengths: Default::default(),
             indices: Default::default(),
+        }
+    }
+
+    pub fn singleton(vec: Vec<Element>) -> Self {
+        JaggedArray {
+            elements: vec,
+            indices: SmallVec::from_slice(&[0]),
         }
     }
 
     pub fn iter(&self) -> Iter<Element> {
         Iter {
             elements: &self.elements,
-            lengths: &self.lengths,
+            indices: &self.indices,
         }
     }
 
     pub fn iter_mut(&mut self) -> IterMut<Element> {
         IterMut {
             elements: &mut self.elements,
-            lengths: &mut self.lengths,
+            indices: &mut self.indices,
         }
     }
 
     pub fn get(&self, n: usize) -> Option<&[Element]> {
-        self.lengths
+        self.indices
             .get(n)
-            .and_then(|len| self.indices.get(n).map(|index| (*len, *index)))
+            .map(|start| {
+                     let end = self.indices
+                         .get(n + 1)
+                         .map(|i| *i)
+                         .unwrap_or(self.elements.len());
+                     (end - start, *start)
+                 })
             .map(|(len, index)| &self.elements[index..index + len])
     }
 
     pub fn get_mut(&mut self, n: usize) -> Option<&mut [Element]> {
         // Explicit if let instead of `.map` to prevent borrowck errors
         if let Some((len, index)) =
-            self.lengths
+            self.indices
                 .get(n)
-                .and_then(|len| self.indices.get(n).map(|index| (*len, *index))) {
+                .map(|start| {
+                         let end = self.indices
+                             .get(n + 1)
+                             .map(|i| *i)
+                             .unwrap_or(self.elements.len());
+                         (end - start, *start)
+                     }) {
             Some(&mut self.elements[index..index + len])
         } else {
             None
@@ -138,7 +170,6 @@ impl<Element, A: Array<Item = usize>> JaggedArray<Element, A> {
 
 impl<Element: Clone, A: Array<Item = usize>> JaggedArray<Element, A> {
     pub fn push(&mut self, slice: &[Element]) {
-        self.lengths.push(slice.len());
         let new_index = self.elements.len();
         self.indices.push(new_index);
         self.elements.extend_from_slice(slice);
@@ -154,7 +185,6 @@ impl<Element: Clone, A: Array<Item = usize>, Slice: AsRef<[Element]>> Extend<Sli
             let slice: &[Element] = slice.as_ref();
             let len = slice.len();
 
-            self.lengths.push(len);
             self.indices.push(total_length);
             self.elements.extend_from_slice(slice);
 
@@ -183,6 +213,20 @@ mod tests {
         let jagged: JaggedArray<_> = input.iter().collect();
 
         let output: Vec<Vec<_>> = jagged.iter().map(|slice| slice.to_owned()).collect();
+
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn assert_returns_same_elements_mut() {
+        let input = vec![vec![1, 2, 3, 4, 5], vec![2, 3, 4], vec![2; 5]];
+
+        let mut jagged: JaggedArray<_> = input.iter().collect();
+
+        let output: Vec<Vec<_>> = jagged
+            .iter_mut()
+            .map(|slice| slice.to_owned())
+            .collect();
 
         assert_eq!(input, output);
     }
