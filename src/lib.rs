@@ -136,7 +136,11 @@ impl<Element, A: Array<Item = usize>> JaggedArray<Element, A> {
         }
     }
 
-    pub fn get(&self, n: usize) -> Option<&[Element]> {
+    pub fn len(&self) -> usize {
+        self.indices.len()
+    }
+
+    fn get_index_len(&self, n: usize) -> Option<(usize, usize)> {
         self.indices
             .get(n)
             .map(|start| {
@@ -144,23 +148,18 @@ impl<Element, A: Array<Item = usize>> JaggedArray<Element, A> {
                          .get(n + 1)
                          .map(|i| *i)
                          .unwrap_or(self.elements.len());
-                     (end - start, *start)
+                     (*start, end - start)
                  })
-            .map(|(len, index)| &self.elements[index..index + len])
+    }
+
+    pub fn get(&self, n: usize) -> Option<&[Element]> {
+        self.get_index_len(n)
+            .map(|(index, len)| &self.elements[index..index + len])
     }
 
     pub fn get_mut(&mut self, n: usize) -> Option<&mut [Element]> {
         // Explicit if let instead of `.map` to prevent borrowck errors
-        if let Some((len, index)) =
-            self.indices
-                .get(n)
-                .map(|start| {
-                         let end = self.indices
-                             .get(n + 1)
-                             .map(|i| *i)
-                             .unwrap_or(self.elements.len());
-                         (end - start, *start)
-                     }) {
+        if let Some((index, len)) = self.get_index_len(n) {
             Some(&mut self.elements[index..index + len])
         } else {
             None
@@ -227,6 +226,36 @@ mod tests {
             .iter_mut()
             .map(|slice| slice.to_owned())
             .collect();
+
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn assert_get_returns_correct_slice() {
+        let input = vec![vec![1, 2, 3, 4, 5], vec![2, 3, 4], vec![2; 5]];
+
+        let jagged: JaggedArray<_> = input.iter().collect();
+
+        let mut output: Vec<Vec<_>> = Default::default();
+
+        for i in 0..jagged.len() {
+            output.push(jagged.get(i).unwrap().to_owned());
+        }
+
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn assert_get_mut_returns_correct_slice() {
+        let input = vec![vec![1, 2, 3, 4, 5], vec![2, 3, 4], vec![2; 5]];
+
+        let mut jagged: JaggedArray<_> = input.iter().collect();
+
+        let mut output: Vec<Vec<_>> = Default::default();
+
+        for i in 0..jagged.len() {
+            output.push(jagged.get_mut(i).unwrap().to_owned());
+        }
 
         assert_eq!(input, output);
     }
